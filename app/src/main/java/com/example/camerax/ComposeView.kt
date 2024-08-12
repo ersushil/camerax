@@ -6,8 +6,8 @@ import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
-import android.util.Log
 import android.widget.Toast
+import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -27,7 +27,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,8 +41,10 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.Executors
+
 
 @Composable
 fun SnapchatLikeCamera() {
@@ -61,49 +62,37 @@ fun SnapchatLikeCamera() {
     // Executor for CameraX operations
     val cameraExecutor = Executors.newSingleThreadExecutor()
     val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
-    // Initialize CameraProvider and ImageCapture
-    LaunchedEffect(lifecycleOwner) {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-        cameraProviderFuture.addListener({
-            cameraProvider = cameraProviderFuture.get()
-
-            val previewBuilder = Preview.Builder().build().also {
-                preview = it
-            }
-
-            val imageCaptureBuilder = ImageCapture.Builder().build().also {
-                imageCapture = it
-            }
-
-
-
-            try {
-                cameraProvider?.unbindAll() // Unbind use cases before rebinding
-                cameraProvider?.bindToLifecycle(
-                    lifecycleOwner, cameraSelector, preview, imageCapture
-                )
-                Log.d("CameraX", "Camera successfully bound")
-            } catch (e: Exception) {
-                Log.e("CameraX", "Error binding camera use cases: ${e.message}")
-            }
-        }, ContextCompat.getMainExecutor(context))
-    }
+    var cameraControl: CameraControl? = remember { null }
+    val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
 
     Box(modifier = Modifier.fillMaxSize()) {
 
         // Camera preview
         AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
             previewView = PreviewView(ctx)
-            PreviewView(ctx).apply {
-                scaleType = PreviewView.ScaleType.FILL_START
-                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
 
-                // Ensure preview is set after initialization
-                preview?.setSurfaceProvider(surfaceProvider)
+            val imageCaptureBuilder = ImageCapture.Builder().build().also {
+                imageCapture = it
             }
-        }, update = { previewView ->
-            preview?.setSurfaceProvider(previewView.surfaceProvider)
+
+            cameraProviderFuture.addListener({
+                cameraProvider = cameraProviderFuture.get()
+
+                preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView!!.surfaceProvider)
+                }
+
+                imageCapture = ImageCapture.Builder().build()
+
+                if (!isCapturing) {
+                    cameraProvider?.bindToLifecycle(
+                        lifecycleOwner, cameraSelector, preview, imageCapture
+                    )
+                }
+
+            }, ContextCompat.getMainExecutor(ctx))
+
+            previewView!!
         })
 
         // Capture Button
@@ -111,11 +100,13 @@ fun SnapchatLikeCamera() {
             onClick = {
                 if (!isCapturing) {
                     isCapturing = true
-                    cameraProvider?.unbind(preview);
-                    capturePhoto(context, imageCapture) { uri ->
+                    cameraProvider!!.unbind(preview)
+                    capturePhoto(context, previewView!!, imageCapture) { uri ->
                         capturedImageUri = uri
                         isCapturing = false
-                        cameraProvider?.bindToLifecycle(lifecycleOwner, cameraSelector, preview, imageCapture);
+                        cameraProvider?.bindToLifecycle(
+                            lifecycleOwner, cameraSelector, preview, imageCapture
+                        )
                     }
                 }
             }, modifier = Modifier
@@ -162,14 +153,31 @@ fun SnapchatLikeCamera() {
 }
 
 private fun capturePhoto(
-    context: Context, imageCapture: ImageCapture?, onImageCaptured: (Uri) -> Unit
+    context: Context,
+    previewView: PreviewView,
+    imageCapture: ImageCapture?,
+    onImageCaptured: (Uri) -> Unit
 ) {
     val photoFile = File(
         context.getExternalFilesDir(null), "${System.currentTimeMillis()}.jpg"
     )
 
+
     val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
 
+    previewView.bitmap?.let { bitmap ->
+        val bytes = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 100, bytes)
+        val path: String = MediaStore.Images.Media.insertImage(
+            context.contentResolver,
+            bitmap,
+            "Title",
+            null
+        )
+        onImageCaptured(Uri.parse(path))
+    }
+
+/*
     imageCapture?.takePicture(outputOptions,
         ContextCompat.getMainExecutor(context),
         object : ImageCapture.OnImageSavedCallback {
@@ -180,21 +188,18 @@ private fun capturePhoto(
 
             override fun onError(exception: ImageCaptureException) {
                 Toast.makeText(
-                    context,
-                    "Photo capture failed: ${exception.message}",
-                    Toast.LENGTH_SHORT
+                    context, "Photo capture failed: ${exception.message}", Toast.LENGTH_SHORT
                 ).show()
                 onImageCaptured(Uri.EMPTY)
             }
-        })
+        })*/
 }
 
 private fun Uri.toBitmap(context: Context): Bitmap? {
     return try {
         if (Build.VERSION.SDK_INT < 28) {
             @Suppress("DEPRECATION") MediaStore.Images.Media.getBitmap(
-                context.contentResolver,
-                this
+                context.contentResolver, this
             )
         } else {
             val source = ImageDecoder.createSource(context.contentResolver, this)
