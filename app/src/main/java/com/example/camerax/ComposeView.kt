@@ -60,6 +60,7 @@ fun SnapchatLikeCamera() {
 
     // Executor for CameraX operations
     val cameraExecutor = Executors.newSingleThreadExecutor()
+    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
     // Initialize CameraProvider and ImageCapture
     LaunchedEffect(lifecycleOwner) {
@@ -75,7 +76,7 @@ fun SnapchatLikeCamera() {
                 imageCapture = it
             }
 
-            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+
 
             try {
                 cameraProvider?.unbindAll() // Unbind use cases before rebinding
@@ -110,10 +111,11 @@ fun SnapchatLikeCamera() {
             onClick = {
                 if (!isCapturing) {
                     isCapturing = true
-
+                    cameraProvider?.unbind(preview);
                     capturePhoto(context, imageCapture) { uri ->
                         capturedImageUri = uri
                         isCapturing = false
+                        cameraProvider?.bindToLifecycle(lifecycleOwner, cameraSelector, preview, imageCapture);
                     }
                 }
             }, modifier = Modifier
